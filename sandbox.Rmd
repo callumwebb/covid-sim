@@ -1,0 +1,207 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r}
+library(tidyverse)
+library(gganimate)
+library(kernlab)
+```
+
+
+# Visualisation
+
+We need to come up with a function that takes a ternary matrix (SIR), a number of each state, and returns a colouring.
+This should "look" spatially believable, where infected individuals are more likely to be clustered. 
+
+Think of it as incrementing a matrix so that each additional infected or state change is a function of the previous state.
+i.e. we have a discrete time step, and could conceivably generate a frame for each unique matrix state.
+
+This might be achieved by a stochastic process / markov process that assigns probabilities for transitions, and randomly samples (with weights) from "candidate" cells to satisfy the change in SIR between each frame.
+
+```{r}
+init_matrix <- function(p, nrow, ncol, s0 = p, i0 = floor(p * 0.1)) {
+  if (p != nrow * ncol) stop("population must be the product of nrow and ncol")
+  
+  mat <- matrix(NA_integer_, nrow = nrow, ncol = ncol) 
+  # coords <- expand.grid(x = 1:ncol, y = 1:nrow)
+  ids <- 1:(ncol*nrow)
+  initial_infected <- sample(ids, i0)
+  mat[initial_infected] <- 1L
+  mat[-initial_infected] <- 0L
+  mat
+}
+```
+
+```{r}
+plot_matrix <- function(mat) {
+  p_data <- expand.grid(1:nrow(mat), 1:ncol(mat)) %>% 
+    cbind(as.vector(mat)) %>% 
+    set_names(c("y", "x", "state"))
+  p <- ggplot(p_data, aes(x = x, y = y, fill = state)) +
+    geom_raster() +
+    coord_fixed()
+  p
+}
+```
+
+```{r, fig.width = 4}
+mat <- init_matrix(640 * 640, 640, 640, i0 = 100)
+plot_matrix(mat)
+```
+
+Now try tackling how to add more infected incrementally, based on location weighting (the hard bit).
+
+```{r}
+#' Given a state matrix, calculate the probability of each element
+#' becoming infected in the next time step
+#'
+#' @param mat current state matrix
+#' @param bandwidth width of kernel
+#'
+#' @return a matrix of
+calc_infection_likelihood <- function(mat, bandwidth = 1, min_prob = 0.2) {
+  H <- diag(c(bandwidth, bandwidth))
+  
+  infected <- which(mat == 1L, arr.ind = TRUE)
+  kde <- ks::kde(
+    x = infected, 
+    H = H,
+    xmin = 0L, xmax = 100L,
+    eval.points = as.matrix(expand.grid(1:nrow(mat), 1:ncol(mat)))
+  ) 
+  
+  # normalise output to range [min_prob, 1], assume fixed lower bound of 0
+  # from kde output
+  max_val <- max(kde$estimate)
+  min_val <- min(kde$estimate)
+  vec <- ((kde$estimate - min_val) / (max_val - min_val)) * 
+    (1 - min_prob) + min_prob
+  matrix(vec, nrow = nrow(mat))
+}
+
+
+increment_infected <- function(mat, n, kernel_fun) {
+  infected <- which(mat == 1L, arr.ind = TRUE)
+  
+}
+```
+
+```{r}
+infect_prob <- calc_infection_likelihood(mat, bandwidth = 10, min_prob = 0) 
+plot_matrix(infect_prob)
+```
+
+```{r}
+next_infected <- sample(1:length(mat), size = 1000, prob = infect_prob)
+mat2 <- mat
+mat2[next_infected] <- 1L
+plot_matrix(mat2)
+```
+
+## SIR model component
+
+```{r}
+library(EpiDynamics)
+```
+
+```{r}
+# Simulation parameters
+infection_prob <- 0.08
+recovery_rate <- 0.1
+
+interactions_daily_normal <- 10
+interactions_daily_distancing <- 3
+
+n_days <- 150
+
+# state intial conditions as a proportion of arbitrary total
+I0 <- 1 / 1E4
+initials <- c(S = 1 - I0, I = I0, R = 0)
+
+run_sir_sim <- function(beta, gamma, initials, total_days) {
+  sir <- SIR(
+    pars = c(beta = beta, gamma = gamma), 
+    init = initials,
+    time = 1:total_days
+  )
+  sir
+}
+```
+
+
+
+
+```{r}
+# Parameters and initial conditions.
+# parameters <- c(beta = 1.4247, gamma = 0.14286)
+# initials <- c(S = 1 - 1e-06, I = 1e-06, R = 0)
+
+# Solve and plot.
+sir_no_distancing <- run_sir_sim(
+  interactions_daily_normal * infection_prob, 
+  recovery_rate,
+  initials, 
+  n_days
+)
+
+sir_distancing <- run_sir_sim(
+  interactions_daily_distancing * infection_prob, 
+  recovery_rate,
+  initials, 
+  n_days
+)
+
+no_distancing_results <- sir_no_distancing$results %>% 
+  pivot_longer(
+    cols = S:R,
+    names_to = "variable",
+    values_to = "value"
+  ) %>% 
+  mutate(scenario = "no_distancing")
+
+distancing_results <- sir_distancing$results %>% 
+  pivot_longer(
+    cols = S:R,
+    names_to = "variable",
+    values_to = "value"
+  ) %>% 
+  mutate(scenario = "distancing")
+
+p_data <- bind_rows(no_distancing_results, distancing_results) %>% 
+  filter(variable == "I")
+
+p <- ggplot(p_data, aes(x = time, y = value, colour = scenario)) +
+  geom_line()
+
+p
+```
+
+Calculate infected and recovered numbers, assuming fixed initial population size
+
+```{r}
+calc_state_frames <- function(sir_results, pop_size) {
+  numbers <- sir_results %>% 
+    mutate(
+      S = round(S * pop_size),
+      I = round(I * pop_size),
+      R = pop_size - S - I
+    )
+  numbers
+}
+```
+
+
+```{r}
+calc_state_frames(sir_distancing$results, 640 * 640)
+```
+
+
+
+
+
+
+
+
+

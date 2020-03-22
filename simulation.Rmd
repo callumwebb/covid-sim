@@ -1,0 +1,87 @@
+---
+title: "COVID simulation"
+output: html_notebook
+---
+
+```{r}
+source("simulation.R")
+```
+
+Simulation parameters
+
+```{r}
+t <- 1:200
+
+parameters_baseline <- c(
+  mu = 0, 
+  beta = 1.75,
+  sigma = 1 / 5, # 1 / mean incubation time?
+  gamma = 0.5
+)
+
+parameters_distancing <- c(
+  mu = 0, 
+  beta = 1.75 / 2,
+  sigma = 1 / 5, # 1 / mean incubation time?
+  gamma = 0.5
+)
+
+initials <- c(
+  S = 1 - 1/1E4, 
+  E = 1/1E4, 
+  I = 0, 
+  R = 0
+)
+
+seir_baseline <- SEIR(
+  pars = parameters_baseline, 
+  init = initials, 
+  time = t
+)
+
+seir_distancing <- SEIR(
+  pars = parameters_distancing, 
+  init = initials, 
+  time = t
+)
+```
+
+```{r}
+p_data <- bind_rows(
+  seir_baseline$results %>% 
+    mutate(scenario = "baseline"),
+  seir_distancing$results %>% 
+    mutate(scenario = "distancing")
+)
+
+p <- ggplot(p_data, aes(x = time, y = I, colour = scenario)) +
+  geom_line()
+
+p
+```
+
+
+
+Initialise matrices
+
+```{r}
+set.seed(1)
+p_size <- 640 * 640
+matrices <- init_matrices(p_size, nrow = 640, ncol = 640, i0 = 100)
+```
+
+
+
+```{r}
+plot_matrix(matrices$i)
+```
+
+```{r}
+infection_likelihood <- calc_infection_likelihood(matrices$s, matrices$i, 10, 0.1)
+```
+
+```{r}
+plot_matrix(infection_likelihood)
+```
+
+
