@@ -3,3 +3,5 @@
 .RData
 .Ruserdata
 *.html
+*.gif
+.DS_Store

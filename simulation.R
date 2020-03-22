@@ -5,6 +5,8 @@ library(tidyverse)
 library(gganimate)
 library(kernlab)
 library(EpiDynamics)
+library(grid)
+library(gridExtra)
 
 
 #' Calculate the number of individuals in each group at every
@@ -17,10 +19,10 @@ library(EpiDynamics)
 calc_state_frames <- function(seir_results, pop_size) {
   numbers <- seir_results %>% 
     mutate(
-      S = round(S * pop_size),
       E = round(E * pop_size),
       I = round(I * pop_size),
-      R = pop_size - S - I - E,
+      R = round(R * pop_size),
+      S = pop_size - E - I - R,
       needs_hosp = round(pop_size * needs_hosp),
       treated = round(pop_size * treated),
       untreated = round(pop_size * untreated)
@@ -119,7 +121,6 @@ calc_exposure_likelihood <- function(S, I, bandwidth = 1, min_prob = 0.2) {
 
 
 update_matrices <- function(S, E, I, R, state_frame, bandwidth = 0.1, min_prob = 0.0) {
-  browser()
   # S -> E -> I -> R
   # But more than one transition can occur in a day, so the transitions need to be
   # processed in order, with calculations including upstream state changes
@@ -127,24 +128,93 @@ update_matrices <- function(S, E, I, R, state_frame, bandwidth = 0.1, min_prob =
   # S -> E === S_E
   exposure_likelihood <- calc_exposure_likelihood(S, I, bandwidth, min_prob)
   S_E <- sum(S) - state_frame$S
-  new_E <- sample(1:length(S), size = S_E, prob = exposure_likelihood)
-  S[new_E] <- 0L
-  E[new_E] <- 1L
-  
+  if (S_E > 0) {
+    new_E <- sample(1:length(S), size = S_E, prob = exposure_likelihood)
+    S[new_E] <- 0L
+    E[new_E] <- 1L  
+  }
+
   # E -> I
   dR <- state_frame$R - sum(R)
   dI <- state_frame$I - sum(I)
   E_I <- dI + dR
-  new_I <- sample(1:length(E), size = E_I, prob = E)
-  E[new_I] <- 0L
-  I[new_I] <- 1L
+  if (E_I > 0) {
+    new_I <- sample(1:length(E), size = E_I, prob = E)
+    E[new_I] <- 0L
+    I[new_I] <- 1L  
+  }
   
   # I -> R
-  new_R <- sample(1:length(I), size = dR, prob = I)
-  I[new_R] <- 0L
-  R[new_R] <- 1L
+  if (dR > 0) {
+    new_R <- sample(1:length(I), size = dR, prob = I)
+    I[new_R] <- 0L
+    R[new_R] <- 1L 
+  }
   
   list(s = S, e = E, i = I, r = R)
+}
+
+gen_sim_plots <- function(state_frames, matrices, bandwidth, min_prob, title, pos = "l") {
+  # cat("\nrendering frame: 1\n")
+  plots <- vector(mode = "list", length = nrow(state_frames))
+  if (pos == "l") {
+    margin_l <- 1
+    margin_r <- 0.5
+  } else {
+    margin_l <- 0.5
+    margin_r <- 1
+  }
+  plots[[1]] <- plot_frame(matrices, title, margin_l = margin_l, margin_r = margin_r)
+  
+  for (i in seq_len(nrow(state_frames) - 1)) {
+    # cat(paste0("rendering frame:", i + 1, "\n"))
+    matrices <- update_matrices(
+      matrices$s,
+      matrices$e,
+      matrices$i,
+      matrices$r,
+      state_frames[i + 1, ],
+      bandwidth = bandwidth,
+      min_prob = min_prob
+    )
+
+    p <- plot_frame(matrices, title, margin_l = margin_l, margin_r = margin_r) 
+    plots[[i + 1]] <- p
+  }
+  plots
+}
+
+
+plot_frame <- function(matrices, title, margin_l, margin_r) {
+  state_mat <- gen_visual_matrix(matrices$s, matrices$e, matrices$i, matrices$r) 
+  p_data <- expand.grid(1:nrow(state_mat), 1:ncol(state_mat)) %>% 
+    cbind(as.vector(state_mat)) %>% 
+    set_names(c("y", "x", "state"))
+
+  p <- ggplot(p_data, aes(x = x, y = y, fill = state)) +
+    geom_raster() +
+    coord_fixed() +
+    scale_x_continuous(expand = expand_scale(0, 0)) +
+    scale_y_continuous(expand = expand_scale(0, 0)) +
+    scale_fill_manual(
+      values = c(
+        "S" = "#EEEEEE", 
+        "E" = "#FFEE93", 
+        "I" = "#FF5b5b",
+        "R" = "#454545"
+      )
+    ) +
+    ggtitle(title) +
+    theme_void(base_size = 20) +
+    theme(
+      legend.position = "none",
+      plot.title = element_text(
+        hjust = 0,
+        margin = margin(5, 0, 5, 0, unit = "pt")
+      ),
+      plot.margin = margin(5, margin_r, 5, margin_l, unit = "pt"),
+    )
+  p
 }
 
 
@@ -157,6 +227,93 @@ gen_visual_matrix <- function(S, E, I, R) {
   result
 }
 
+save_frames <- function(plots_A, plots_B, plots_lines, out_path = "./png/", break_at = 200) {
+  for (i in seq_along(plots_A)) {
+    if (i >= break_at) break
+    cat(paste0("Saving frame ", i, "\n"))
+    
+    lay <- rbind(
+      c(1, 1),
+      c(2, 3),
+      c(4, 4)
+    )
+    title_grob <- textGrob(
+      label = "#FlattenTheCurve",  hjust = 0, x = 0.02,
+      gp = gpar(col = "black", fontsize = 32)
+    )
+    gs <- list(title_grob, plots_A[[i]], plots_B[[i]], plots_lines[[i]])
+    
+    png(
+      filename = paste0(out_path, formatC(i, width = 4, format = "d", flag = "0"), ".png"), 
+      width = 700, height = 600, units = "px"
+    )
+    grid.arrange(grobs = gs, layout_matrix = lay, heights = c(0.6, 4, 2))
+    dev.off()
+    # ggsave(
+    #   paste0(out_path, formatC(i, width = 4, format = "d", flag = "0"), ".png"), 
+    #   arrangeGrob(plots_A[[i]], plots_B[[i]], width = 4000, units = "px")
+    # )
+  }
+}
 
+
+gen_line_plots <- function(seir_baseline, seir_distancing, out_path = "./png/lines/") {
+  plots <- vector(mode = "list", length = nrow(seir_baseline))
+  for (i in seq_len(nrow(seir_baseline))) {
+    plots[[i]] <- plot_lines_frame(seir_baseline, seir_distancing, i)
+  }
+  plots
+}
+
+
+plot_lines_frame <- function(seir_A, seir_B, current_t) {
+  df_A <- seir_A %>% 
+    pivot_longer(
+      S:R,
+      names_to = "variable",
+      values_to = "value"
+    ) %>% 
+    mutate(scenario = "bau")
+  df_B <- seir_B %>% 
+    pivot_longer(
+      S:R,
+      names_to = "variable",
+      values_to = "value"
+    ) %>% 
+    mutate(scenario = "isolate")
+  df_lines <- bind_rows(df_A, df_B) %>% 
+    filter(time <= current_t)
+  
+  df_points <- data.frame(
+    t = current_t,
+    variable = "I",
+    scenario = c("bau", "isolate"),
+    value = c(seir_A[current_t, "I"], seir_B[current_t, "I"])
+  )
+  
+  df_infectious_line <- df_lines %>% 
+    filter(variable == "I")
+  
+  # browser()
+  
+  p <- ggplot(
+    df_infectious_line, 
+    aes(x = time, y = value, colour = as.factor(scenario), group = as.factor(scenario))
+  ) +
+    geom_line() +
+    scale_y_continuous(
+      labels = scales::percent_format(accuracy = 1),
+      name = "infectious",
+      limits = c(0, 0.1)
+    ) +
+    scale_x_continuous(
+      name = "day",
+      limits = c(min(seir_A$time), max(seir_B$time)),
+    ) +
+    theme_minimal(base_size = 20) +
+    theme(legend.position = "none")
+  
+  p
+}
 
 

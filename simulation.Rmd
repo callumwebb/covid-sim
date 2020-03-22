@@ -33,7 +33,7 @@ parameters_distancing <- c(
 
 initials <- c(
   S = 1 - 1/1E4, 
-  E = 1/1E4, 
+  E = 1/1E3, 
   I = 0, 
   R = 0
 )
@@ -92,69 +92,65 @@ Initialise matrices
 ```{r}
 set.seed(1)
 p_size <- 100 * 100
-matrices <- init_matrices(p_size, nrow = 100, ncol = 100, e0 = 100)
-```
 
-
-```{r}
-plot_matrix(matrices$i)
-```
-
-```{r}
 states_baseline <- calc_state_frames(baseline, p_size)
 states_baseline
 ```
 
+```{r}
+states_distancing <- calc_state_frames(distancing, p_size)
+states_distancing
+```
+
 
 ```{r}
 matrices <- init_matrices(p_size, nrow = 100, ncol = 100, e0 = states_baseline[1, "E"])
-infection_likelihood <- calc_exposure_likelihood(matrices$s, matrices$i, 10, 0.1)
+matrices_baseline <- matrices
+matrices_distancing <- matrices
 ```
 
 ```{r}
-plot_matrix(infection_likelihood)
-```
-
-
-
-```{r}
-set.seed(0)
-matrices <- init_matrices(p_size, nrow = 100, ncol = 100, e0 = states_baseline[1, "E"])
-for (i in seq_len(38)) {
-  # browser()
-  cat(paste0(i, " "))
-  matrices <- update_matrices(
-    matrices$s,
-    matrices$e,
-    matrices$i,
-    matrices$r,
-    states_baseline[i + 1, ]
-  )
-}
-```
-
-```{r}
-p_mat <- gen_visual_matrix(
-  matrices$s,
-  matrices$e,
-  matrices$i,
-  matrices$r
+set.seed(5)
+plots_base <- gen_sim_plots(
+  states_baseline[1:50, ], matrices_baseline, 1, 1E-5, 
+  title = "Do nothing"
 )
 ```
 
-
 ```{r}
-p <- plot_matrix(p_mat)
-
-p + scale_fill_manual(
-  values = c(
-    "S" = "#D9D1D6", 
-    "E" = "#FFEE93", 
-    "I" = "#FF6b6b",
-    "R" = "#454545"
-  )
+set.seed(5)
+plots_distancing <- gen_sim_plots(
+  states_distancing[1:50, ], matrices_distancing, 1, 1E-5, 
+  title = "Social distancing"
 )
 ```
 
+```{r}
+plots_lines <- gen_line_plots(seir_baseline$results, seir_distancing$results)
+```
 
+
+```{r}
+save_frames(plots_base, plots_distancing, plots_lines, break_at = 5)
+```
+
+```{r}
+gifski::gifski(
+  list.files("./png/", pattern = "\\.png$", full.names = TRUE), 
+  gif_file = "out2.gif",
+  delay = 0.1,
+  width = 1000,
+  height = 600
+)
+```
+
+```{r}
+p <- plot_frame(matrices_baseline, "Business as usual")
+```
+
+
+```{r}
+p <- plot_lines_frame(seir_baseline$results, seir_distancing$results, 20)
+p
+```
 
