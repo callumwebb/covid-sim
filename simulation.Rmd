@@ -1,11 +1,10 @@
 ---
-title: "COVID simulation"
+title: "COVID Social distancing simulation"
 output: html_notebook
 ---
 
 ```{r}
 source("simulation.R")
-library(pracma)
 ```
 
 Simulation parameters
@@ -14,20 +13,20 @@ Simulation parameters
 t <- 1:200
 
 # Hospital parameters
-beds_per_1000pop <- 5
+beds_per_1000pop <- 10
 hospitalisation_rate <- 0.15
 
 parameters_baseline <- c(
   mu = 0, 
   beta = 1.75,
-  sigma = 1 / 5, # 1 / mean incubation time?
+  sigma = 1 / 5, # 1 / mean incubation time
   gamma = 0.5
 )
 
 parameters_distancing <- c(
   mu = 0, 
   beta = 1.75 / 2,
-  sigma = 1 / 5, # 1 / mean incubation time?
+  sigma = 1 / 5, # 1 / mean incubation time
   gamma = 0.5
 )
 
@@ -87,7 +86,7 @@ p <- ggplot(p_data, aes(x = time, y = I, colour = scenario)) +
 p
 ```
 
-Initialise matrices
+
 
 ```{r}
 set.seed(1)
@@ -110,47 +109,37 @@ matrices_distancing <- matrices
 ```
 
 ```{r}
-set.seed(5)
+set.seed(1)
 plots_base <- gen_sim_plots(
-  states_baseline[1:50, ], matrices_baseline, 1, 1E-5, 
-  title = "Do nothing"
+  #states_baseline[1:50, ], matrices_baseline, 1, 1E-5, 
+  states_baseline, matrices_baseline, 1, 1E-5, 
+  title = "Do nothing", pos = "l"
 )
 ```
 
 ```{r}
 set.seed(5)
 plots_distancing <- gen_sim_plots(
-  states_distancing[1:50, ], matrices_distancing, 1, 1E-5, 
-  title = "Social distancing"
+  #states_distancing[1:50, ], matrices_distancing, 1, 1E-5, 
+  states_distancing, matrices_distancing, 1, 1E-5, 
+  title = "Social distancing", pos = "r"
 )
 ```
 
-```{r}
-plots_lines <- gen_line_plots(seir_baseline$results, seir_distancing$results)
-```
-
 
 ```{r}
-save_frames(plots_base, plots_distancing, plots_lines, break_at = 5)
+save_frames(plots_base, plots_distancing, break_at = 201)
 ```
 
 ```{r}
 gifski::gifski(
   list.files("./png/", pattern = "\\.png$", full.names = TRUE), 
-  gif_file = "out2.gif",
+  gif_file = "social_distancing.gif",
   delay = 0.1,
   width = 1000,
   height = 600
 )
 ```
 
-```{r}
-p <- plot_frame(matrices_baseline, "Business as usual")
-```
 
-
-```{r}
-p <- plot_lines_frame(seir_baseline$results, seir_distancing$results, 20)
-p
-```
 

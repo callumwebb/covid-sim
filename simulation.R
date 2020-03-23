@@ -1,5 +1,5 @@
 
-# Script for generating infection data, and animating results
+# Functions for generating infection data, and animating results
 
 library(tidyverse)
 library(gganimate)
@@ -120,7 +120,7 @@ calc_exposure_likelihood <- function(S, I, bandwidth = 1, min_prob = 0.2) {
 }
 
 
-update_matrices <- function(S, E, I, R, state_frame, bandwidth = 0.1, min_prob = 0.0) {
+update_matrices <- function(S, E, I, R, MT, state_frame, bandwidth = 0.1, min_prob = 0.0) {
   # S -> E -> I -> R
   # But more than one transition can occur in a day, so the transitions need to be
   # processed in order, with calculations including upstream state changes
@@ -144,6 +144,23 @@ update_matrices <- function(S, E, I, R, state_frame, bandwidth = 0.1, min_prob =
     I[new_I] <- 1L  
   }
   
+  # Check those making the E -> I transition to see how 
+  # many that would require hospitalisation can get it,
+  # based on the current number of I cases requiring 
+  # hospitalisation
+  if (E_I > 0) {
+    # This is a rough way of doing this, but it is for illustrative purposes
+    new_cases_req_treat <- round(E_I * hospitalisation_rate)
+    beds_max <- round(beds_per_1000pop / 1E3 * 
+      (sum(S) + sum(E) + sum(I) + sum(R)))
+    beds_occupied <- round(min(state_frame$I * hospitalisation_rate, beds_max))
+    beds_available <- max(0, beds_max - beds_occupied)
+    if (new_cases_req_treat > beds_available) {
+      missed_treatment <- new_cases_req_treat - beds_available
+      MT[sample(1:length(I), size = missed_treatment, prob = I)] <- 1L
+    } 
+  }
+  
   # I -> R
   if (dR > 0) {
     new_R <- sample(1:length(I), size = dR, prob = I)
@@ -151,9 +168,20 @@ update_matrices <- function(S, E, I, R, state_frame, bandwidth = 0.1, min_prob =
     R[new_R] <- 1L 
   }
   
-  list(s = S, e = E, i = I, r = R)
+  list(s = S, e = E, i = I, r = R, mt = MT)
 }
 
+
+#' Incrementally generate ggplot2 plots for each time step (state frame)
+#'
+#' @param state_frames 
+#' @param matrices 
+#' @param bandwidth 
+#' @param min_prob 
+#' @param title 
+#' @param pos 
+#'
+#' @return a list of ggplot2 plots
 gen_sim_plots <- function(state_frames, matrices, bandwidth, min_prob, title, pos = "l") {
   # cat("\nrendering frame: 1\n")
   plots <- vector(mode = "list", length = nrow(state_frames))
@@ -166,6 +194,8 @@ gen_sim_plots <- function(state_frames, matrices, bandwidth, min_prob, title, po
   }
   plots[[1]] <- plot_frame(matrices, title, margin_l = margin_l, margin_r = margin_r)
   
+  # Initialise missed treatment matrix
+  matrices[["mt"]] <- matrix(0L, nrow = nrow(matrices$s), ncol = ncol(matrices$s))
   for (i in seq_len(nrow(state_frames) - 1)) {
     # cat(paste0("rendering frame:", i + 1, "\n"))
     matrices <- update_matrices(
@@ -173,6 +203,7 @@ gen_sim_plots <- function(state_frames, matrices, bandwidth, min_prob, title, po
       matrices$e,
       matrices$i,
       matrices$r,
+      matrices$mt,
       state_frames[i + 1, ],
       bandwidth = bandwidth,
       min_prob = min_prob
@@ -185,8 +216,17 @@ gen_sim_plots <- function(state_frames, matrices, bandwidth, min_prob, title, po
 }
 
 
+#' Turn a single state of S, E, I, R and MT matrices into a visualisation
+#'
+#' @param matrices 
+#' @param title 
+#' @param margin_l 
+#' @param margin_r 
+#'
+#' @return a ggplot2 plot
 plot_frame <- function(matrices, title, margin_l, margin_r) {
-  state_mat <- gen_visual_matrix(matrices$s, matrices$e, matrices$i, matrices$r) 
+  state_mat <- gen_visual_matrix(matrices$s, matrices$e, matrices$i, matrices$r, matrices$mt) 
+  
   p_data <- expand.grid(1:nrow(state_mat), 1:ncol(state_mat)) %>% 
     cbind(as.vector(state_mat)) %>% 
     set_names(c("y", "x", "state"))
@@ -201,7 +241,8 @@ plot_frame <- function(matrices, title, margin_l, margin_r) {
         "S" = "#EEEEEE", 
         "E" = "#FFEE93", 
         "I" = "#FF5b5b",
-        "R" = "#454545"
+        "R" = "#454545",
+        "MT" = "#FF3030"
       )
     ) +
     ggtitle(title) +
@@ -218,16 +259,36 @@ plot_frame <- function(matrices, title, margin_l, margin_r) {
 }
 
 
-gen_visual_matrix <- function(S, E, I, R) {
+#' Generate a single matrix from S, E, I, R, MT matrices that represents
+#' colouring for each cell
+#'
+#' @param S 
+#' @param E 
+#' @param I 
+#' @param R 
+#' @param MT 
+#'
+#' @return a character matrix
+gen_visual_matrix <- function(S, E, I, R, MT) {
   result <- matrix(NA_character_, nrow = nrow(S), ncol = ncol(S))
   result[which(S == 1)] <- "S"
   result[which(E == 1)] <- "E"
   result[which(I == 1)] <- "I"
   result[which(R == 1)] <- "R"
+  result[which(MT == 1)] <- "MT"
   result
 }
 
-save_frames <- function(plots_A, plots_B, plots_lines, out_path = "./png/", break_at = 200) {
+
+#' Save a list of png frames
+#'
+#' @param plots_A 
+#' @param plots_B 
+#' @param out_path 
+#' @param break_at 
+#'
+#' @return
+save_frames <- function(plots_A, plots_B, out_path = "./png/", break_at = 200) {
   for (i in seq_along(plots_A)) {
     if (i >= break_at) break
     cat(paste0("Saving frame ", i, "\n"))
@@ -235,19 +296,31 @@ save_frames <- function(plots_A, plots_B, plots_lines, out_path = "./png/", brea
     lay <- rbind(
       c(1, 1),
       c(2, 3),
-      c(4, 4)
+      c(4, 4),
+      c(5, 5)
     )
     title_grob <- textGrob(
       label = "#FlattenTheCurve",  hjust = 0, x = 0.02,
-      gp = gpar(col = "black", fontsize = 32)
+      gp = gpar(col = "black", fontsize = 32, fontface = "bold")
     )
-    gs <- list(title_grob, plots_A[[i]], plots_B[[i]], plots_lines[[i]])
+    day_grob <- textGrob(
+      label = paste0("Day: ", i, "\n"),
+      gp = gpar(col = "black", fontsize = 22, fontfamily = "Helvetica Neue", fontface = "bold"),
+      x = 0.02, hjust = 0, y = 0
+    )
+    blurb_grob <- textGrob(
+      "People remaining red didn't get a hospital bed when they needed it",
+      gp = gpar(col = "black", fontsize = 20, fontfamily = "Helvetica Neue", fontface = "italic"),
+      hjust = 0, 
+      x = 0.02, vjust = 0
+    )
+    gs <- list(title_grob, plots_A[[i]], plots_B[[i]], day_grob, blurb_grob)
     
     png(
       filename = paste0(out_path, formatC(i, width = 4, format = "d", flag = "0"), ".png"), 
-      width = 700, height = 600, units = "px"
+      width = 700, height = 500, units = "px"
     )
-    grid.arrange(grobs = gs, layout_matrix = lay, heights = c(0.6, 4, 2))
+    grid.arrange(grobs = gs, layout_matrix = lay, heights = c(0.6, 4, 0.5, 0.5))
     dev.off()
     # ggsave(
     #   paste0(out_path, formatC(i, width = 4, format = "d", flag = "0"), ".png"), 
